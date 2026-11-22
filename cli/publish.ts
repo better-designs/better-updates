@@ -49,14 +49,21 @@ if (!runtimeVersion) {
   fail("The app config sets runtimeVersion as a policy. Pass the resolved value with --runtime-version.");
 }
 
+// Upload every file for every platform first, so a failed upload never leaves
+// one platform published without the other.
+const releases = [];
 for (const [platform, files] of Object.entries(metadata.fileMetadata)) {
   if (!files) continue;
   const launchAsset = await upload(files.bundle, "application/javascript");
   const assets = [];
   for (const asset of files.assets) {
     const described = await upload(asset.path, CONTENT_TYPES[asset.ext] ?? "application/octet-stream");
-    assets.push({ ...described, fileExtension: `.${asset.ext}` });
+    assets.push({ ...described, fileExtension: `.${asset.ext.toLowerCase()}` });
   }
+  releases.push({ platform, launchAsset, assets });
+}
+
+for (const { platform, launchAsset, assets } of releases) {
   const result = await call(`/v1/projects/${args.project}/updates`, "POST", JSON.stringify({
     platform,
     channel: args.channel,

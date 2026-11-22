@@ -31,6 +31,16 @@ interface PublishBody {
   extra?: Manifest["extra"];
 }
 
+/** File types an update may carry. Anything else could run as a page on this host. */
+const CONTENT_TYPES = new Set([
+  "application/javascript", "application/json", "application/octet-stream",
+  "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml",
+  "font/ttf", "font/otf", "font/woff", "font/woff2", "audio/mpeg", "audio/wav", "video/mp4",
+]);
+const HASH = /^[A-Za-z0-9_-]{43}$/;
+const KEY = /^[a-f0-9]{32}$/;
+const EXTENSION = /^\.[a-z0-9]{1,8}$/;
+
 const PROJECT = "[a-z0-9][a-z0-9-]{0,62}";
 const routes: [string, RegExp, (req: Request, env: Env, params: string[]) => Promise<Response>][] = [
   ["GET", new RegExp(`^/v1/projects/(${PROJECT})/manifest$`), serveManifest],
@@ -69,7 +79,7 @@ async function serveManifest(req: Request, env: Env, [project]: string[]): Promi
   const row = await env.DB.prepare(
     `SELECT id, kind, manifest, created_at FROM updates
      WHERE project = ? AND channel = ? AND runtime_version = ? AND platform = ?
-     ORDER BY created_at DESC LIMIT 1`,
+     ORDER BY created_at DESC, rowid DESC LIMIT 1`,
   )
     .bind(project, channel, runtimeVersion, platform)
     .first<UpdateRow>();
@@ -116,6 +126,7 @@ async function serveAsset(_req: Request, env: Env, [hash]: string[]): Promise<Re
       "content-type": object.httpMetadata?.contentType ?? "application/octet-stream",
       // An asset never changes at its address: the address is its hash.
       "cache-control": "public, max-age=31536000, immutable",
+      "x-content-type-options": "nosniff",
     },
   });
 }
@@ -123,13 +134,15 @@ async function serveAsset(_req: Request, env: Env, [hash]: string[]): Promise<Re
 async function uploadAsset(req: Request, env: Env, [, hash]: string[]): Promise<Response> {
   const denied = authorize(req, env);
   if (denied) return denied;
+  const contentType = req.headers.get("content-type") ?? "application/octet-stream";
+  if (!CONTENT_TYPES.has(contentType)) return json({ error: `content type ${contentType} is not allowed` }, 415);
   if (await env.ASSETS.head(`assets/${hash}`)) return json({ hash, stored: false });
   const bytes = await req.arrayBuffer();
   if (base64url(await crypto.subtle.digest("SHA-256", bytes)) !== hash) {
     return json({ error: "the body does not match its hash" }, 400);
   }
   await env.ASSETS.put(`assets/${hash}`, bytes, {
-    httpMetadata: { contentType: req.headers.get("content-type") ?? "application/octet-stream" },
+    httpMetadata: { contentType },
   });
   return json({ hash, stored: true }, 201);
 }
@@ -137,9 +150,9 @@ async function uploadAsset(req: Request, env: Env, [, hash]: string[]): Promise<
 async function publishUpdate(req: Request, env: Env, [project]: string[]): Promise<Response> {
   const denied = authorize(req, env);
   if (denied) return denied;
-  const body = (await req.json()) as PublishBody;
-  const problem = checkTarget(body);
-  if (problem) return json({ error: problem }, 400);
+  const body = await readJson<PublishBody>(req);
+  const problem = checkTarget(body) ?? checkFiles(body!);
+  if (problem || !body) return json({ error: problem }, 400);
 
   const files = [body.launchAsset, ...body.assets];
   const missing = (await Promise.all(files.map(async (f) => ((await env.ASSETS.head(`assets/${f.hash}`)) ? null : f.hash)))).filter(Boolean);
@@ -161,9 +174,9 @@ async function publishUpdate(req: Request, env: Env, [project]: string[]): Promi
 async function publishRollback(req: Request, env: Env, [project]: string[]): Promise<Response> {
   const denied = authorize(req, env);
   if (denied) return denied;
-  const body = (await req.json()) as Pick<PublishBody, "channel" | "runtimeVersion" | "platform">;
+  const body = await readJson<Pick<PublishBody, "channel" | "runtimeVersion" | "platform">>(req);
   const problem = checkTarget(body);
-  if (problem) return json({ error: problem }, 400);
+  if (problem || !body) return json({ error: problem }, 400);
   const id = crypto.randomUUID();
   const createdAt = new Date().toISOString();
   await insert(env, project, body, "rollback", id, createdAt, null);
@@ -187,10 +200,29 @@ function insert(
     .run();
 }
 
-function checkTarget(body: Partial<Pick<PublishBody, "channel" | "runtimeVersion" | "platform">>): string | undefined {
+async function readJson<T>(req: Request): Promise<T | undefined> {
+  try {
+    return (await req.json()) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function checkTarget(body: Partial<Pick<PublishBody, "channel" | "runtimeVersion" | "platform">> | undefined): string | undefined {
+  if (!body || typeof body !== "object") return "the body must be JSON";
   if (body.platform !== "ios" && body.platform !== "android") return "platform must be ios or android";
   if (!body.runtimeVersion) return "runtimeVersion is required";
   if (!body.channel) return "channel is required";
+}
+
+function checkFiles(body: PublishBody): string | undefined {
+  if (!body.launchAsset || !Array.isArray(body.assets)) return "launchAsset and assets are required";
+  for (const file of [body.launchAsset, ...body.assets]) {
+    if (!HASH.test(file.hash)) return `bad hash ${file.hash}`;
+    if (!KEY.test(file.key)) return `bad key ${file.key}`;
+    if (!CONTENT_TYPES.has(file.contentType)) return `content type ${file.contentType} is not allowed`;
+    if (file.fileExtension !== undefined && !EXTENSION.test(file.fileExtension)) return `bad file extension ${file.fileExtension}`;
+  }
 }
 
 function authorize(req: Request, env: Env): Response | undefined {

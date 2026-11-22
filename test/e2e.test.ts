@@ -161,3 +161,21 @@ test("publishing needs the token, and an asset must match its hash", async () =>
   });
   expect(wrongHash.status).toBe(400);
 });
+
+test("an update with a bad file description or a page-like file is refused", async () => {
+  const auth = { authorization: `Bearer ${TOKEN}` };
+  const html = await fetch(`${BASE}/v1/projects/demo/assets/${"B".repeat(43)}`, {
+    method: "PUT",
+    headers: { ...auth, "content-type": "text/html" },
+    body: "<script>alert(1)</script>",
+  });
+  expect(html.status).toBe(415);
+  const badJson = await fetch(`${BASE}/v1/projects/demo/updates`, { method: "POST", headers: auth, body: "{" });
+  expect(badJson.status).toBe(400);
+  const noAssets = await fetch(`${BASE}/v1/projects/demo/updates`, {
+    method: "POST",
+    headers: auth,
+    body: JSON.stringify({ channel: "production", runtimeVersion: "1.0.0", platform: "ios" }),
+  });
+  expect(noAssets.status).toBe(400);
+});
