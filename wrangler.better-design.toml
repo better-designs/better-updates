@@ -1,0 +1,13 @@
+name = "better-updates"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "better-updates"
+database_id = "5701b04c-eefa-480a-a94c-0b52f5ced1ac"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "better-updates-assets"
