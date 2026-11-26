@@ -1,0 +1,62 @@
+# Builds the iOS app on a macOS runner and uploads it to TestFlight.
+# Copy to .github/workflows/ in your Expo app.
+# Signing is automatic: Xcode creates the certificate and profile with your App Store Connect API key.
+# Secrets:
+#   ASC_KEY_P8          the API key file (.p8) contents, App Manager role or higher
+#   ASC_KEY_ID, ASC_ISSUER_ID
+# Variables: APPLE_TEAM_ID
+name: Build iOS
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: npx expo prebuild --platform ios --clean
+      - name: Write the API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc.p8"
+      - name: Archive
+        working-directory: ios
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          workspace=$(find . -maxdepth 1 -name "*.xcworkspace" | head -n 1)
+          workspace="${workspace#./}"
+          scheme="${workspace%.xcworkspace}"
+          xcodebuild archive \
+            -workspace "$workspace" -scheme "$scheme" -configuration Release \
+            -destination "generic/platform=iOS" -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            DEVELOPMENT_TEAM="${{ vars.APPLE_TEAM_ID }}" CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/export.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>${{ vars.APPLE_TEAM_ID }}</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"

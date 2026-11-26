@@ -36,6 +36,18 @@ npx expo export
 BETTER_UPDATES_TOKEN=... bun cli/publish.ts --server https://<your-worker> --project <project> --channel production
 ```
 
+## Build and ship from GitHub Actions
+
+Copy the files in `templates/` into your app's `.github/workflows/`. Each file lists the secrets it needs at the top.
+
+| File | What it does |
+|---|---|
+| `publish-update.yml` | Exports the app and publishes an update to your server on every push to `main` |
+| `build-android.yml` | Builds a signed App Bundle and uploads it to a Google Play track |
+| `build-ios.yml` | Builds on a macOS runner, signs with your App Store Connect API key and uploads to TestFlight |
+
+If EAS holds your current Android upload key, download it with `eas credentials` first: Play rejects a bundle signed with a new key.
+
 ## Roll back
 
 ```sh

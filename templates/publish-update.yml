@@ -1,0 +1,26 @@
+# Publishes an over-the-air update to your Better Updates server on every push to main.
+# Copy to .github/workflows/ in your Expo app.
+# Secrets: BETTER_UPDATES_TOKEN. Variables: BETTER_UPDATES_URL, BETTER_UPDATES_PROJECT.
+name: Publish update
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: npx expo export
+      - run: git clone --depth 1 https://github.com/better-designs/better-updates "$RUNNER_TEMP/better-updates"
+      - name: Publish
+        env:
+          BETTER_UPDATES_TOKEN: ${{ secrets.BETTER_UPDATES_TOKEN }}
+        run: >
+          bun "$RUNNER_TEMP/better-updates/cli/publish.ts"
+          --server "${{ vars.BETTER_UPDATES_URL }}"
+          --project "${{ vars.BETTER_UPDATES_PROJECT }}"
+          --channel production
+          --message "${{ github.sha }}"
