@@ -5,7 +5,7 @@ import { signBody } from "./signing";
 export interface Env {
   DB: D1Database;
   ASSETS: R2Bucket;
-  /** Bearer token the publish command sends. */
+  /** Admin token: publishes to any project and creates projects. */
   PUBLISH_TOKEN: string;
   /** PEM private key for update code signing. Optional until an app asks for signatures. */
   SIGNING_PRIVATE_KEY?: string;
@@ -43,6 +43,8 @@ const EXTENSION = /^\.[a-z0-9]{1,8}$/;
 
 const PROJECT = "[a-z0-9][a-z0-9-]{0,62}";
 const routes: [string, RegExp, (req: Request, env: Env, params: string[]) => Promise<Response>][] = [
+  ["POST", /^\/v1\/projects$/, createProject],
+  ["POST", new RegExp(`^/v1/projects/(${PROJECT})/keys$`), rotateKey],
   ["GET", new RegExp(`^/v1/projects/(${PROJECT})/manifest$`), serveManifest],
   ["GET", /^\/v1\/assets\/([A-Za-z0-9_-]{43})$/, serveAsset],
   ["PUT", new RegExp(`^/v1/projects/(${PROJECT})/assets/([A-Za-z0-9_-]{43})$`), uploadAsset],
@@ -131,8 +133,8 @@ async function serveAsset(_req: Request, env: Env, [hash]: string[]): Promise<Re
   });
 }
 
-async function uploadAsset(req: Request, env: Env, [, hash]: string[]): Promise<Response> {
-  const denied = authorize(req, env);
+async function uploadAsset(req: Request, env: Env, [project, hash]: string[]): Promise<Response> {
+  const denied = await authorize(req, env, project);
   if (denied) return denied;
   const contentType = req.headers.get("content-type") ?? "application/octet-stream";
   if (!CONTENT_TYPES.has(contentType)) return json({ error: `content type ${contentType} is not allowed` }, 415);
@@ -148,7 +150,7 @@ async function uploadAsset(req: Request, env: Env, [, hash]: string[]): Promise<
 }
 
 async function publishUpdate(req: Request, env: Env, [project]: string[]): Promise<Response> {
-  const denied = authorize(req, env);
+  const denied = await authorize(req, env, project);
   if (denied) return denied;
   const body = await readJson<PublishBody>(req);
   const problem = checkTarget(body) ?? checkFiles(body!);
@@ -172,7 +174,7 @@ async function publishUpdate(req: Request, env: Env, [project]: string[]): Promi
 }
 
 async function publishRollback(req: Request, env: Env, [project]: string[]): Promise<Response> {
-  const denied = authorize(req, env);
+  const denied = await authorize(req, env, project);
   if (denied) return denied;
   const body = await readJson<Pick<PublishBody, "channel" | "runtimeVersion" | "platform">>(req);
   const problem = checkTarget(body);
@@ -225,10 +227,57 @@ function checkFiles(body: PublishBody): string | undefined {
   }
 }
 
-function authorize(req: Request, env: Env): Response | undefined {
-  const expected = `Bearer ${env.PUBLISH_TOKEN}`;
-  const given = req.headers.get("authorization") ?? "";
-  if (!env.PUBLISH_TOKEN || !timingSafeEqual(given, expected)) return json({ error: "unauthorized" }, 401);
+/** Creates a project with its own publish key. Admin token only. The key is shown once. */
+async function createProject(req: Request, env: Env): Promise<Response> {
+  if (!isAdmin(req, env)) return json({ error: "unauthorized" }, 401);
+  const body = await readJson<{ slug?: string; owner?: string }>(req);
+  if (!body?.slug || !new RegExp(`^${PROJECT}$`).test(body.slug)) return json({ error: "slug must be lowercase letters, digits and dashes" }, 400);
+  const key = newKey();
+  const created = await env.DB.prepare(
+    "INSERT INTO projects (slug, key_hash, owner, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (slug) DO NOTHING",
+  )
+    .bind(body.slug, await sha256Hex(key), body.owner ?? null, new Date().toISOString())
+    .run();
+  if (!created.meta.changes) return json({ error: "this project already exists" }, 409);
+  return json({ slug: body.slug, key }, 201);
+}
+
+/** Replaces a project's key. The old key stops working at once. */
+async function rotateKey(req: Request, env: Env, [project]: string[]): Promise<Response> {
+  const denied = await authorize(req, env, project);
+  if (denied) return denied;
+  const key = newKey();
+  const updated = await env.DB.prepare("UPDATE projects SET key_hash = ? WHERE slug = ?").bind(await sha256Hex(key), project).run();
+  if (!updated.meta.changes) return json({ error: "this project has no key of its own" }, 404);
+  return json({ slug: project, key }, 201);
+}
+
+/** The admin token opens every project; a project key opens only its own project. */
+async function authorize(req: Request, env: Env, project: string): Promise<Response | undefined> {
+  if (isAdmin(req, env)) return;
+  const given = bearer(req);
+  if (given) {
+    const row = await env.DB.prepare("SELECT key_hash FROM projects WHERE slug = ?").bind(project).first<{ key_hash: string }>();
+    if (row && timingSafeEqual(await sha256Hex(given), row.key_hash)) return;
+  }
+  return json({ error: "unauthorized" }, 401);
+}
+
+function isAdmin(req: Request, env: Env): boolean {
+  return Boolean(env.PUBLISH_TOKEN) && timingSafeEqual(bearer(req), env.PUBLISH_TOKEN);
+}
+
+function bearer(req: Request): string {
+  return req.headers.get("authorization")?.match(/^Bearer (.+)$/)?.[1] ?? "";
+}
+
+function newKey(): string {
+  return `bu_${[...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

@@ -1,6 +1,7 @@
 name = "better-updates"
 main = "src/index.ts"
 compatibility_date = "2026-11-01"
+workers_dev = true
 
 [[d1_databases]]
 binding = "DB"
@@ -11,3 +12,7 @@ migrations_dir = "migrations"
 [[r2_buckets]]
 binding = "ASSETS"
 bucket_name = "better-updates-assets"
+
+[[routes]]
+pattern = "updates.better-design.com"
+custom_domain = true

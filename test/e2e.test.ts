@@ -179,3 +179,40 @@ test("an update with a bad file description or a page-like file is refused", asy
   });
   expect(noAssets.status).toBe(400);
 });
+
+test("a project key publishes to its own project and nowhere else", async () => {
+  const admin = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+  const created = await fetch(`${BASE}/v1/projects`, {
+    method: "POST",
+    headers: admin,
+    body: JSON.stringify({ slug: "team-a", owner: "user_123" }),
+  });
+  expect(created.status).toBe(201);
+  const { key } = (await created.json()) as { key: string };
+  expect(key).toMatch(/^bu_[a-f0-9]{48}$/);
+
+  const again = await fetch(`${BASE}/v1/projects`, { method: "POST", headers: admin, body: JSON.stringify({ slug: "team-a" }) });
+  expect(again.status).toBe(409);
+
+  const rollback = (project: string, token: string) =>
+    fetch(`${BASE}/v1/projects/${project}/rollbacks`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ channel: "production", runtimeVersion: "1.0.0", platform: "android" }),
+    });
+  expect((await rollback("team-a", key)).status).toBe(201);
+  expect((await rollback("demo", key)).status).toBe(401);
+
+  const noAdmin = await fetch(`${BASE}/v1/projects`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({ slug: "team-b" }),
+  });
+  expect(noAdmin.status).toBe(401);
+
+  const rotated = await fetch(`${BASE}/v1/projects/team-a/keys`, { method: "POST", headers: { authorization: `Bearer ${key}` } });
+  expect(rotated.status).toBe(201);
+  const { key: newKey } = (await rotated.json()) as { key: string };
+  expect((await rollback("team-a", key)).status).toBe(401);
+  expect((await rollback("team-a", newKey)).status).toBe(201);
+});

@@ -10,6 +10,7 @@ Assets live in R2, which charges nothing for downloads. Update records live in D
 - Signed updates with update code signing
 - Rollback to the update inside the binary
 - A publish command for `npx expo export` output
+- One publish key per project
 
 ## Deploy
 
@@ -35,6 +36,18 @@ In `app.json`, set `updates.url` to `https://<your-worker>/v1/projects/<project>
 npx expo export
 BETTER_UPDATES_TOKEN=... bun cli/publish.ts --server https://<your-worker> --project <project> --channel production
 ```
+
+## Give each app its own key
+
+The token from `setup` is the admin token. It publishes to every project. To give one app or one team a key that publishes only to its own project:
+
+```sh
+curl -X POST https://<your-worker>/v1/projects \
+  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"slug":"my-app","owner":"team-a"}'
+```
+
+The answer holds the key once. The server keeps only its hash. To replace a key, call `POST /v1/projects/<project>/keys` with the old key or the admin token; the old key stops working at once.
 
 ## Build and ship from GitHub Actions
 
