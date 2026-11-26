@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": ["@cloudflare/workers-types", "bun-types"]
   },
-  "include": ["src", "cli", "test"]
+  "include": ["src", "cli", "test", "scripts"]
 }

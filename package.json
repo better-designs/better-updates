@@ -21,6 +21,7 @@
     "migrate": "wrangler d1 migrations apply better-updates --remote",
     "publish-update": "bun cli/publish.ts",
     "typecheck": "tsc -p .",
-    "test": "bun test"
+    "test": "bun test",
+    "setup": "bun scripts/setup.ts"
   }
 }

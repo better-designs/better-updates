@@ -13,15 +13,17 @@ Assets live in R2, which charges nothing for downloads. Update records live in D
 
 ## Deploy
 
+You need a Cloudflare account and Bun.
+
 ```sh
+git clone https://github.com/better-designs/better-updates && cd better-updates
 bun install
-bunx wrangler d1 create better-updates      # copy the id into wrangler.toml
-bunx wrangler r2 bucket create better-updates-assets
-bun run migrate
-bunx wrangler secret put PUBLISH_TOKEN
-bunx wrangler secret put SIGNING_PRIVATE_KEY  # optional: keys/private-key.pem from `npx expo-updates codesigning:generate`
-bun run deploy
+bunx wrangler login
+bun run setup                                        # database, bucket, schema, deploy, publish token
+bun run setup --signing-key keys/private-key.pem     # optional: also store the update signing key
 ```
+
+`setup` is safe to run again. It prints your server address and, the first time, your publish token. To sign updates, create the key pair with `npx expo-updates codesigning:generate` in your app.
 
 ## Point your app at it
 
